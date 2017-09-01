@@ -2,7 +2,7 @@ import { mount } from 'enzyme';
 import React from 'react';
 
 import { setViewContext } from 'amo/actions/viewContext';
-import {
+import SearchForm, {
   SearchFormBase,
   mapStateToProps,
 } from 'amo/components/SearchForm';
@@ -12,13 +12,19 @@ import {
   ADDON_TYPE_EXTENSION,
   ADDON_TYPE_LANG,
   ADDON_TYPE_THEME,
+  CLIENT_APP_ANDROID,
+  CLIENT_APP_FIREFOX,
+  VIEW_CONTEXT_EXPLORE,
   VIEW_CONTEXT_HOME,
 } from 'core/constants';
 import LoadingText from 'ui/components/LoadingText';
 import {
+  autocompleteCancel,
+  autocompleteStart,
+} from 'core/reducers/autocomplete';
+import {
   createFakeAutocompleteResult,
   dispatchAutocompleteResults,
-  dispatchClientMetadata,
   dispatchSignInActions,
 } from 'tests/unit/amo/helpers';
 import {
@@ -26,38 +32,53 @@ import {
   createStubErrorHandler,
   getFakeI18nInst,
 } from 'tests/unit/helpers';
-import {
-  autocompleteCancel,
-  autocompleteStart,
-} from 'core/reducers/autocomplete';
 
 
 describe(__filename, () => {
-  const pathname = '/search/';
-  const api = { clientApp: 'firefox', lang: 'de' };
   let errorHandler;
-  let router;
+  // let fakeDispatch;
+  let fakeRouter;
 
-  const mountComponent = ({
-    store = dispatchClientMetadata().store,
+  function mountComponent({
+    pathname = '/search/',
+    query = 'foo',
+    store = dispatchSignInActions().store,
     ...props
-  } = {}) => {
+  } = {}) {
     return mount(
-      <SearchFormBase
-        api={api}
+      <SearchForm
         debounce={(callback) => (...args) => callback(...args)}
-        dispatch={() => {}}
         errorHandler={errorHandler}
         i18n={getFakeI18nInst()}
-        loadingSuggestions={false}
         pathname={pathname}
+        query={query}
+        router={fakeRouter}
         store={store}
-        suggestions={[]}
-        router={router}
         {...props}
       />
     );
-  };
+  }
+
+  function mountBaseComponent({
+    pathname = '/search/',
+    query = 'foo',
+    store = dispatchSignInActions().store,
+    ...props
+  } = {}) {
+    return mount(
+      <SearchFormBase
+        debounce={(callback) => (...args) => callback(...args)}
+        dispatch={sinon.stub()}
+        errorHandler={errorHandler}
+        i18n={getFakeI18nInst()}
+        pathname={pathname}
+        query={query}
+        router={fakeRouter}
+        {...mapStateToProps(store.getState())}
+        {...props}
+      />
+    );
+  }
 
   const createFakeChangeEvent = (value = '') => {
     return createFakeEvent({
@@ -68,7 +89,7 @@ describe(__filename, () => {
   describe('render/UI', () => {
     beforeEach(() => {
       errorHandler = createStubErrorHandler();
-      router = { push: sinon.spy() };
+      fakeRouter = { push: sinon.spy() };
     });
 
     it('renders a form', () => {
@@ -78,7 +99,9 @@ describe(__filename, () => {
     });
 
     it('renders a search input with Explore placeholder', () => {
-      const wrapper = mountComponent();
+      const { store } = dispatchSignInActions();
+      store.dispatch(setViewContext(VIEW_CONTEXT_EXPLORE));
+      const wrapper = mountComponent({ store });
       const input = wrapper.find('input');
 
       expect(input).toHaveProp('placeholder', 'Find add-ons');
@@ -86,9 +109,9 @@ describe(__filename, () => {
     });
 
     it('renders Dictionary placeholder', () => {
-      const wrapper = mountComponent({
-        addonType: ADDON_TYPE_DICT,
-      });
+      const { store } = dispatchSignInActions();
+      store.dispatch(setViewContext(ADDON_TYPE_DICT));
+      const wrapper = mountComponent({ store });
       const input = wrapper.find('input');
 
       expect(input).toHaveProp('placeholder', 'Find dictionary');
@@ -96,9 +119,9 @@ describe(__filename, () => {
     });
 
     it('renders Extensions placeholder', () => {
-      const wrapper = mountComponent({
-        addonType: ADDON_TYPE_EXTENSION,
-      });
+      const { store } = dispatchSignInActions();
+      store.dispatch(setViewContext(ADDON_TYPE_EXTENSION));
+      const wrapper = mountComponent({ store });
       const input = wrapper.find('input');
 
       expect(input).toHaveProp('placeholder', 'Find extensions');
@@ -106,9 +129,9 @@ describe(__filename, () => {
     });
 
     it('renders Language Pack placeholder', () => {
-      const wrapper = mountComponent({
-        addonType: ADDON_TYPE_LANG,
-      });
+      const { store } = dispatchSignInActions();
+      store.dispatch(setViewContext(ADDON_TYPE_LANG));
+      const wrapper = mountComponent({ store });
       const input = wrapper.find('input');
 
       expect(input).toHaveProp('placeholder', 'Find language pack');
@@ -116,9 +139,9 @@ describe(__filename, () => {
     });
 
     it('renders Themes placeholder', () => {
-      const wrapper = mountComponent({
-        addonType: ADDON_TYPE_THEME,
-      });
+      const { store } = dispatchSignInActions();
+      store.dispatch(setViewContext(ADDON_TYPE_THEME));
+      const wrapper = mountComponent({ store });
       const input = wrapper.find('input');
 
       expect(input).toHaveProp('placeholder', 'Find themes');
@@ -134,17 +157,17 @@ describe(__filename, () => {
     it('changes the URL on submit', () => {
       const wrapper = mountComponent();
 
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
       wrapper.find('.SearchForm-query').simulate(
         'change', createFakeChangeEvent('adblock'));
       wrapper.find('form').simulate('submit');
-      sinon.assert.called(router.push);
+      sinon.assert.called(fakeRouter.push);
     });
 
     it('blurs the form on submit', () => {
       const wrapper = mountComponent();
       const blurSpy = sinon.spy(
-        wrapper.instance().autosuggest.input, 'blur');
+        wrapper.find(SearchFormBase).getNode().autosuggest.input, 'blur');
 
       sinon.assert.notCalled(blurSpy);
       wrapper.find('input').simulate('change', createFakeChangeEvent('something'));
@@ -155,69 +178,89 @@ describe(__filename, () => {
     it('does nothing on non-Enter keydowns', () => {
       const wrapper = mountComponent();
 
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
       wrapper.find('input').simulate('change', createFakeChangeEvent('adblock'));
       wrapper.find('input').simulate('keydown', { key: 'A', shiftKey: true });
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
     });
 
     it('updates the location on form submit', () => {
       const wrapper = mountComponent();
 
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
       wrapper.find('input').simulate('change', createFakeChangeEvent('adblock'));
       wrapper.find('button').simulate('click');
-      sinon.assert.called(router.push);
+      sinon.assert.called(fakeRouter.push);
     });
 
     it('passes addonType when set', () => {
-      const wrapper = mountComponent({
-        addonType: ADDON_TYPE_EXTENSION,
+      const { store } = dispatchSignInActions({
+        clientApp: CLIENT_APP_FIREFOX,
+        lang: 'de',
       });
+      store.dispatch(setViewContext(ADDON_TYPE_EXTENSION));
+      const wrapper = mountComponent({ store });
 
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
       wrapper.find('input').simulate('change', createFakeChangeEvent('& 26 %'));
       wrapper.find('button').simulate('click');
-      sinon.assert.calledWith(router.push, {
+      sinon.assert.calledWith(fakeRouter.push, {
         pathname: '/de/firefox/search/',
-        query: { q: '& 26 %', type: ADDON_TYPE_EXTENSION },
+        query: {
+          platform: 'windows',
+          q: '& 26 %',
+          type: ADDON_TYPE_EXTENSION,
+        },
       });
     });
 
     it('does not set type when it is not defined', () => {
-      const wrapper = mountComponent();
+      const { store } = dispatchSignInActions({
+        clientApp: CLIENT_APP_ANDROID,
+        lang: 'fr',
+      });
+      store.dispatch(setViewContext(VIEW_CONTEXT_EXPLORE));
+      const wrapper = mountComponent({ store });
 
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
       wrapper.find('input').simulate('change', createFakeChangeEvent('searching'));
       wrapper.find('button').simulate('click');
-      sinon.assert.calledWith(router.push, {
-        pathname: '/de/firefox/search/',
-        query: { q: 'searching' },
+      sinon.assert.calledWith(fakeRouter.push, {
+        pathname: '/fr/android/search/',
+        query: { platform: 'windows', q: 'searching' },
       });
     });
 
     it('encodes the value of the search text', () => {
       const wrapper = mountComponent();
 
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
       wrapper.find('input').simulate('change', createFakeChangeEvent('& 26 %'));
       wrapper.find('button').simulate('click');
-      sinon.assert.calledWith(router.push, {
-        pathname: '/de/firefox/search/',
-        query: { q: '& 26 %' },
+      sinon.assert.calledWith(fakeRouter.push, {
+        pathname: '/en-US/android/search/',
+        query: { platform: 'windows', q: '& 26 %' },
       });
     });
 
     it('updates the state when props update', () => {
-      const wrapper = mountComponent({ query: '' });
-      expect(wrapper.state('searchValue')).toEqual('');
-
-      wrapper.setProps({ query: 'foo' });
+      // We can't access the state of components composed with higher order
+      // components (HOCs) so we need to mount `SearchFormBase` for the this
+      // test.
+      const { store } = dispatchSignInActions({
+        clientApp: CLIENT_APP_ANDROID,
+        lang: 'fr',
+      });
+      store.dispatch(setViewContext(VIEW_CONTEXT_EXPLORE));
+      const wrapper = mountBaseComponent({ store });
       expect(wrapper.state('searchValue')).toEqual('foo');
+
+      wrapper.setProps({ query: 'bar' });
+      expect(wrapper.state('searchValue')).toEqual('bar');
     });
 
     it('updates the state when user is typing', () => {
-      const wrapper = mountComponent({ query: '' });
+      const wrapper = mountBaseComponent({ query: '' });
       expect(wrapper.state('searchValue')).toEqual('');
 
       wrapper.find('input').simulate('change', createFakeChangeEvent('foo'));
@@ -228,35 +271,34 @@ describe(__filename, () => {
     });
 
     it('fetches suggestions on focus', () => {
-      const dispatch = sinon.spy();
-      const wrapper = mountComponent({
-        query: 'foo',
-        dispatch,
-      });
-      // Expect no call to to handleSuggestionsFetchRequested() until the input
-      // has focus, even if there is already a `searchValue`
-      sinon.assert.notCalled(dispatch);
-      // This is needed to trigger handleSuggestionsFetchRequested()
+      const { store } = dispatchSignInActions();
+      const dispatchSpy = sinon.spy(store, 'dispatch');
+      const wrapper = mountComponent({ query: 'foo', store });
+      // Expect no call to to `handleSuggestionsFetchRequested()` until
+      // the input has focus, even if there is already a `searchValue`.
+      sinon.assert.notCalled(dispatchSpy);
+      // This is needed to trigger `handleSuggestionsFetchRequested()`.
       wrapper.find('input').simulate('focus');
-      sinon.assert.callCount(dispatch, 1);
-      sinon.assert.calledWith(dispatch, autocompleteStart({
+
+      sinon.assert.callCount(dispatchSpy, 1);
+      sinon.assert.calledWith(dispatchSpy, autocompleteStart({
         errorHandlerId: errorHandler.id,
         filters: {
           query: 'foo',
+          operatingSystem: 'windows',
         },
       }));
     });
 
     it('clears suggestions when input is cleared', () => {
-      const dispatch = sinon.spy();
-      const wrapper = mountComponent({
-        query: 'foo',
-        dispatch,
-      });
-      // clearing the input calls handleSuggestionsClearRequested()
+      const { store } = dispatchSignInActions();
+      const dispatchSpy = sinon.spy(store, 'dispatch');
+      const wrapper = mountComponent({ query: 'foo', store });
+
+      // Clearing the input calls `handleSuggestionsClearRequested()`.
       wrapper.find('input').simulate('change', createFakeChangeEvent());
-      sinon.assert.callCount(dispatch, 1);
-      sinon.assert.calledWith(dispatch, autocompleteCancel());
+      sinon.assert.callCount(dispatchSpy, 1);
+      sinon.assert.calledWith(dispatchSpy, autocompleteCancel());
     });
 
     it('displays suggestions when user is typing', () => {
@@ -266,7 +308,7 @@ describe(__filename, () => {
       ] });
       const { autocomplete: autocompleteState } = store.getState();
 
-      const wrapper = mountComponent({
+      const wrapper = mountBaseComponent({
         query: 'foo',
         suggestions: autocompleteState.suggestions,
       });
@@ -285,7 +327,7 @@ describe(__filename, () => {
       const { autocomplete: autocompleteState } = store.getState();
 
       // setting the `query` prop to empty also sets the input state to empty.
-      const wrapper = mountComponent({
+      const wrapper = mountBaseComponent({
         query: '',
         suggestions: autocompleteState.suggestions,
       });
@@ -294,7 +336,7 @@ describe(__filename, () => {
     });
 
     it('does not display suggestions when there is no suggestion', () => {
-      const wrapper = mountComponent({ suggestions: [] });
+      const wrapper = mountBaseComponent({ suggestions: [] });
 
       wrapper.find('input').simulate('focus');
       expect(wrapper.find(Suggestion)).toHaveLength(0);
@@ -309,10 +351,7 @@ describe(__filename, () => {
         filters: { query: 'test' },
       }));
 
-      const wrapper = mountComponent({
-        ...mapStateToProps(store.getState()),
-        query: 'test',
-      });
+      const wrapper = mountComponent({ query: 'test', store });
       wrapper.find('input').simulate('focus');
       expect(wrapper.find(LoadingText)).toHaveLength(10);
     });
@@ -322,7 +361,7 @@ describe(__filename, () => {
       const { store } = dispatchAutocompleteResults({ results: [result] });
       const { autocomplete: autocompleteState } = store.getState();
 
-      const wrapper = mountComponent({
+      const wrapper = mountBaseComponent({
         query: 'foo',
         suggestions: autocompleteState.suggestions,
       });
@@ -331,8 +370,8 @@ describe(__filename, () => {
       wrapper.find('input').simulate('focus');
       wrapper.find(Suggestion).simulate('click');
       expect(wrapper.state('searchValue')).toEqual('');
-      sinon.assert.callCount(router.push, 1);
-      sinon.assert.calledWith(router.push, result.url);
+      sinon.assert.callCount(fakeRouter.push, 1);
+      sinon.assert.calledWith(fakeRouter.push, result.url);
     });
 
     it('ignores loading suggestions that are selected', () => {
@@ -340,7 +379,7 @@ describe(__filename, () => {
       const { store } = dispatchAutocompleteResults({ results: [result] });
       const { autocomplete: autocompleteState } = store.getState();
 
-      const wrapper = mountComponent({ query: 'baz' });
+      const wrapper = mountBaseComponent({ query: 'baz' });
       expect(wrapper.state('searchValue')).toEqual('baz');
 
       wrapper.instance().handleSuggestionSelected(createFakeEvent(), {
@@ -350,33 +389,32 @@ describe(__filename, () => {
         },
       });
       expect(wrapper.state('searchValue')).toEqual('baz');
-      sinon.assert.notCalled(router.push);
+      sinon.assert.notCalled(fakeRouter.push);
     });
 
-    it('does not fetch suggestions when there is not value', () => {
+    it('does not fetch suggestions when there is no search value', () => {
       const dispatch = sinon.spy();
-      const wrapper = mountComponent({ dispatch });
+      const wrapper = mountBaseComponent({ dispatch });
 
       wrapper.instance().handleSuggestionsFetchRequested({});
       sinon.assert.notCalled(dispatch);
     });
 
     it('adds addonType to the filters used to fetch suggestions', () => {
-      const dispatch = sinon.spy();
-      const wrapper = mountComponent({
-        query: 'ad',
-        addonType: ADDON_TYPE_EXTENSION,
-        dispatch,
-      });
+      const { store } = dispatchSignInActions();
+      store.dispatch(setViewContext(ADDON_TYPE_EXTENSION));
+      const dispatchSpy = sinon.spy(store, 'dispatch');
+      const wrapper = mountComponent({ query: 'ad', store });
 
       wrapper.find('input').simulate('focus');
 
-      sinon.assert.callCount(dispatch, 1);
-      sinon.assert.calledWith(dispatch, autocompleteStart({
+      sinon.assert.callCount(dispatchSpy, 1);
+      sinon.assert.calledWith(dispatchSpy, autocompleteStart({
         errorHandlerId: errorHandler.id,
         filters: {
-          query: 'ad',
           addonType: ADDON_TYPE_EXTENSION,
+          operatingSystem: 'windows',
+          query: 'ad',
         },
       }));
     });
@@ -430,7 +468,7 @@ describe(__filename, () => {
 
       store.dispatch(autocompleteStart({
         errorHandlerId: errorHandler.id,
-        filters: { query: 'test' },
+        filters: { platform: 'windows', query: 'test' },
       }));
 
       const state = store.getState();
